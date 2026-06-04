@@ -8,6 +8,8 @@ Dépendance : yt-dlp  →  pip install yt-dlp
 import sys
 import os
 import re
+import shutil
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 
 # ── Couleurs terminal ──────────────────────────────────────────────────────────
@@ -24,8 +26,54 @@ def check_dependencies():
         import yt_dlp  # noqa: F401
     except ImportError:
         print(f"{RED}[ERREUR]{RESET} yt-dlp n'est pas installé.")
-        print(f"  → Lance : {CYAN}pip install yt-dlp{RESET}")
+        print(f"  → Lance : {CYAN}pip install -U \"yt-dlp[default]\"{RESET}")
         sys.exit(1)
+
+    try:
+        import yt_dlp_ejs  # noqa: F401
+    except ImportError:
+        print(f"{YELLOW}[AVERTISSEMENT]{RESET} yt-dlp-ejs manquant (scripts YouTube).")
+        print(f"  → Lance : {CYAN}pip install -U \"yt-dlp[default]\"{RESET}\n")
+
+
+def _find_js_runtime() -> dict:
+    """Active Node (prioritaire) ou Deno pour l'extraction YouTube (yt-dlp EJS)."""
+    if shutil.which("node"):
+        return {"node": {}}
+    if shutil.which("deno"):
+        return {"deno": {}}
+    return {}
+
+
+def normalize_youtube_url(url: str) -> str:
+    """Ne garde que la vidéo ciblée (ignore list=, radio, mix, etc.)."""
+    parsed = urlparse(url.strip())
+    if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
+        return url.strip()
+
+    if "youtu.be" in parsed.netloc:
+        video_id = parsed.path.lstrip("/").split("/")[0]
+        if video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+        return url.strip()
+
+    qs = parse_qs(parsed.query)
+    video_id = (qs.get("v") or [None])[0]
+    if not video_id:
+        return url.strip()
+
+    clean_qs = urlencode({"v": video_id})
+    return urlunparse(parsed._replace(query=clean_qs, fragment=""))
+
+
+def base_ydl_opts(**extra) -> dict:
+    opts = {
+        "noplaylist": True,
+        "js_runtimes": _find_js_runtime(),
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+    }
+    opts.update(extra)
+    return opts
 
 
 def is_valid_youtube_url(url: str) -> bool:
@@ -46,7 +94,8 @@ def get_best_no_merge_format(url: str) -> tuple[str, list]:
     """
     import yt_dlp
 
-    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+    url = normalize_youtube_url(url)
+    with yt_dlp.YoutubeDL(base_ydl_opts(quiet=True, no_warnings=True)) as ydl:
         info = ydl.extract_info(url, download=False)
 
     formats = info.get("formats", [])
@@ -99,14 +148,15 @@ def download_video(url: str, output_dir: str = ".") -> None:
             print(line)
         print(f"\n  {GREEN}→ Sélectionné : format {fmt_id}{RESET}")
 
-    ydl_opts = {
-        "format": fmt_id,
-        "outtmpl": os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
-        "progress_hooks": [progress_hook],
-        "postprocessors": [],   # Aucune fusion, aucune conversion
-        "quiet": False,
-        "no_warnings": False,
-    }
+    url = normalize_youtube_url(url)
+    ydl_opts = base_ydl_opts(
+        format=fmt_id,
+        outtmpl=os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
+        progress_hooks=[progress_hook],
+        postprocessors=[],
+        quiet=False,
+        no_warnings=False,
+    )
 
     print(f"\n{BOLD}  Démarrage du téléchargement…{RESET}")
     print(f"{CYAN}{'─'*55}{RESET}\n")
@@ -173,6 +223,17 @@ def main() -> None:
     print(f"{BOLD}{CYAN}║   YouTube Downloader – Sans ffmpeg       ║{RESET}")
     print(f"{BOLD}{CYAN}╚══════════════════════════════════════════╝{RESET}\n")
 
+    runtime = _find_js_runtime()
+    if runtime:
+        name = next(iter(runtime))
+        print(f"  {GREEN}Runtime JS :{RESET} {name}")
+    else:
+        print(f"  {YELLOW}Runtime JS :{RESET} aucun (installe Node ou Deno)")
+        print(f"  → https://github.com/yt-dlp/yt-dlp/wiki/EJS\n")
+
+    if not shutil.which("ffmpeg"):
+        print(f"  {YELLOW}ffmpeg :{RESET} absent (formats pré-fusionnés uniquement)\n")
+
     output_dir = os.path.join(os.path.expanduser("~"), "Téléchargements")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -196,7 +257,7 @@ def main() -> None:
             continue
 
         try:
-            download_video(url, output_dir=output_dir)
+            download_video(normalize_youtube_url(url), output_dir=output_dir)
             print(f"\n  {CYAN}Enregistré dans : {output_dir}{RESET}\n")
         except Exception as exc:
             print(f"\n  {RED}Échec : {exc}{RESET}\n")
