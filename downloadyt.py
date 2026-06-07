@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Téléchargeur vidéo multi-plateformes – sans ffmpeg
+Téléchargeur vidéo multi-plateformes
 YouTube, Facebook, Instagram, TikTok via yt-dlp.
-Privilégie les formats pré-fusionnés (vidéo + audio dans un seul fichier).
+Avec ffmpeg : meilleure qualité (vidéo + audio fusionnés).
+Sans ffmpeg : formats pré-fusionnés uniquement.
 """
 
 import sys
@@ -77,6 +78,10 @@ def check_dependencies():
         print(f"  → Lance : {CYAN}pip install -U \"yt-dlp[default]\"{RESET}\n")
 
 
+def has_ffmpeg() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
 def _find_js_runtime() -> dict:
     """Active Node (prioritaire) ou Deno pour l'extraction YouTube (yt-dlp EJS)."""
     if shutil.which("node"):
@@ -138,18 +143,54 @@ def is_supported_url(url: str) -> bool:
     return detect_platform(url) is not None
 
 
-def get_best_no_merge_format(url: str, platform: str) -> tuple[str, list]:
-    """
-    Analyse les formats disponibles et retourne le meilleur format
-    pré-fusionné (vidéo+audio dans le même fichier), sans ffmpeg.
-    """
+def _format_size_str(fmt: dict) -> str:
+    sz = fmt.get("filesize") or fmt.get("filesize_approx")
+    return f"{sz / 1_048_576:.1f} Mo" if sz else "taille inconnue"
+
+
+def _extract_formats(url: str, platform: str) -> list[dict]:
     import yt_dlp
 
     url = normalize_url(url, platform)
     with yt_dlp.YoutubeDL(base_ydl_opts(platform, quiet=True, no_warnings=True)) as ydl:
         info = ydl.extract_info(url, download=False)
+    return info.get("formats", [])
 
-    formats = info.get("formats", [])
+
+def select_download_profile(url: str, platform: str) -> tuple[str, list, list, str]:
+    """
+    Retourne (format_id, aperçu, postprocessors, mode).
+    Avec ffmpeg : meilleure vidéo + meilleur audio fusionnés.
+    Sans ffmpeg : meilleur format déjà fusionné.
+    """
+    formats = _extract_formats(url, platform)
+
+    if has_ffmpeg():
+        video_only = [
+            f for f in formats
+            if f.get("vcodec") not in (None, "none")
+            and f.get("acodec") in (None, "none")
+        ]
+        video_only.sort(
+            key=lambda f: (
+                f.get("height") or 0,
+                f.get("filesize") or f.get("filesize_approx") or 0,
+            ),
+            reverse=True,
+        )
+
+        preview = []
+        for f in video_only[:5]:
+            h   = f.get("height", "?")
+            ext = f.get("ext", "?")
+            fps = f.get("fps", "?")
+            preview.append(
+                f"  {f['format_id']:>10}  {h}p  {fps}fps  {ext}  {_format_size_str(f)}"
+            )
+
+        fmt = "bestvideo*+bestaudio/best"
+        postprocessors = [{"key": "FFmpegMerger"}]
+        return fmt, preview, postprocessors, "haute qualité (ffmpeg)"
 
     combined = [
         f for f in formats
@@ -158,7 +199,7 @@ def get_best_no_merge_format(url: str, platform: str) -> tuple[str, list]:
     ]
 
     if not combined:
-        return "best[ext=mp4]/best[ext=webm]/best", []
+        return "best[ext=mp4]/best[ext=webm]/best", [], [], "standard (sans ffmpeg)"
 
     combined.sort(
         key=lambda f: (
@@ -168,17 +209,16 @@ def get_best_no_merge_format(url: str, platform: str) -> tuple[str, list]:
         reverse=True,
     )
 
-    best = combined[0]
     preview = []
     for f in combined[:5]:
         h   = f.get("height", "?")
         ext = f.get("ext", "?")
         fps = f.get("fps", "?")
-        sz  = f.get("filesize") or f.get("filesize_approx")
-        sz_str = f"{sz / 1_048_576:.1f} Mo" if sz else "taille inconnue"
-        preview.append(f"  {f['format_id']:>10}  {h}p  {fps}fps  {ext}  {sz_str}")
+        preview.append(
+            f"  {f['format_id']:>10}  {h}p  {fps}fps  {ext}  {_format_size_str(f)}"
+        )
 
-    return best["format_id"], preview
+    return combined[0]["format_id"], preview, [], "pré-fusionné (sans ffmpeg)"
 
 
 def download_video(url: str, output_dir: str = ".") -> None:
@@ -195,23 +235,32 @@ def download_video(url: str, output_dir: str = ".") -> None:
     print(f"{BOLD}  Plateforme :{RESET} {platform_name}")
     print(f"{BOLD}  Analyse des formats disponibles…{RESET}")
 
-    fmt_id, preview = get_best_no_merge_format(url, platform)
+    fmt_id, preview, postprocessors, mode = select_download_profile(url, platform)
+    print(f"  {BOLD}Mode     :{RESET} {mode}")
 
     if preview:
-        print(f"\n  {YELLOW}Formats pré-fusionnés détectés (top 5) :{RESET}")
+        label = (
+            "Pistes vidéo disponibles (top 5, audio fusionné par ffmpeg)"
+            if has_ffmpeg()
+            else "Formats pré-fusionnés détectés (top 5)"
+        )
+        print(f"\n  {YELLOW}{label} :{RESET}")
         for line in preview:
             print(line)
-        print(f"\n  {GREEN}→ Sélectionné : format {fmt_id}{RESET}")
+
+    print(f"\n  {GREEN}→ Sélectionné : {fmt_id}{RESET}")
 
     ydl_opts = base_ydl_opts(
         platform,
         format=fmt_id,
         outtmpl=os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
         progress_hooks=[progress_hook],
-        postprocessors=[],
+        postprocessors=postprocessors,
         quiet=False,
         no_warnings=False,
     )
+    if postprocessors:
+        ydl_opts["merge_output_format"] = "mp4"
 
     print(f"\n{BOLD}  Démarrage du téléchargement…{RESET}")
     print(f"{CYAN}{'─'*55}{RESET}\n")
@@ -281,7 +330,7 @@ def main() -> None:
     check_dependencies()
 
     print(f"\n{BOLD}{CYAN}╔══════════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}{CYAN}║   Video Downloader – Sans ffmpeg         ║{RESET}")
+    print(f"{BOLD}{CYAN}║   Video Downloader                       ║{RESET}")
     print(f"{BOLD}{CYAN}╚══════════════════════════════════════════╝{RESET}\n")
     print(f"  {BOLD}Plateformes :{RESET} {_supported_platforms_hint()}\n")
 
@@ -293,8 +342,11 @@ def main() -> None:
         print(f"  {YELLOW}Runtime JS :{RESET} aucun {YELLOW}(YouTube uniquement){RESET}")
         print(f"  → https://github.com/yt-dlp/yt-dlp/wiki/EJS\n")
 
-    if not shutil.which("ffmpeg"):
-        print(f"  {YELLOW}ffmpeg :{RESET} absent (formats pré-fusionnés uniquement)\n")
+    if has_ffmpeg():
+        print(f"  {GREEN}ffmpeg :{RESET} détecté (meilleure qualité disponible)\n")
+    else:
+        print(f"  {YELLOW}ffmpeg :{RESET} absent (formats pré-fusionnés uniquement)")
+        print(f"  → Installe : {CYAN}winget install Gyan.FFmpeg{RESET}\n")
 
     output_dir = os.path.join(os.path.expanduser("~"), "Téléchargements")
     os.makedirs(output_dir, exist_ok=True)

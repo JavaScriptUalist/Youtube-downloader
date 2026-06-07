@@ -1,7 +1,7 @@
-# Video Downloader (sans ffmpeg)
+# Video Downloader
 
 Téléchargeur vidéo en ligne de commande, écrit en Python.  
-Il utilise [yt-dlp](https://github.com/yt-dlp/yt-dlp) et cible les **formats pré-fusionnés** (vidéo + audio dans un seul fichier), donc **ffmpeg n'est pas obligatoire**.
+Il utilise [yt-dlp](https://github.com/yt-dlp/yt-dlp). **Avec ffmpeg**, il télécharge la meilleure vidéo + le meilleur audio et les fusionne (1080p, 4K…). **Sans ffmpeg**, il se limite aux formats déjà fusionnés (souvent 360p–720p).
 
 Licence : [MIT](LICENSE) — libre d'utilisation, modification et redistribution.
 
@@ -30,8 +30,8 @@ Licence : [MIT](LICENSE) — libre d'utilisation, modification et redistribution
 |-----------|-------------|-------|
 | Python 3.10+ | Oui | |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) + EJS | Oui | via `yt-dlp[default]` |
-| Node.js 22+ **ou** Deno 2.3+ | Recommandé | requis pour l'extraction YouTube ([doc EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS)) |
-| ffmpeg | Non | améliore la qualité et le choix des formats |
+| Node.js 22+ **ou** Deno 2.3+ | Recommandé | requis pour YouTube ([doc EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS)) |
+| **ffmpeg** | Recommandé | **meilleure qualité** (fusion vidéo + audio) ; sans lui, résolution limitée |
 
 ## Installation
 
@@ -54,10 +54,19 @@ Puis téléchargez `downloadyt.py` depuis ce dépôt.
 - Windows : [nodejs.org](https://nodejs.org/) ou `winget install OpenJS.NodeJS.LTS`
 - Deno (alternative) : [docs.deno.com](https://docs.deno.com/runtime/getting_started/installation/)
 
-### ffmpeg (optionnel)
+### ffmpeg (recommandé pour la meilleure qualité)
+
+Le script détecte ffmpeg automatiquement. S'il est installé, il télécharge la **meilleure vidéo** et la **meilleure piste audio**, puis les fusionne en MP4.
 
 ```bash
 winget install Gyan.FFmpeg
+```
+
+Fermez et rouvrez le terminal après l'installation. Au lancement, vous devez voir :
+
+```
+ffmpeg : détecté (meilleure qualité disponible)
+Mode     : haute qualité (ffmpeg)
 ```
 
 ## Utilisation
@@ -79,20 +88,21 @@ Les fichiers sont enregistrés dans :
 
 ```
 ╔══════════════════════════════════════════╗
-║   Video Downloader – Sans ffmpeg         ║
+║   Video Downloader                       ║
 ╚══════════════════════════════════════════╝
 
   Plateformes : YouTube, Facebook, Instagram, TikTok
 
   Runtime JS : node (YouTube)
-  ffmpeg : absent (formats pré-fusionnés uniquement)
+  ffmpeg : détecté (meilleure qualité disponible)
 
-  Colle le lien vidéo (ou 'q' pour quitter) : https://www.tiktok.com/@user/video/...
+  Colle le lien vidéo (ou 'q' pour quitter) : https://www.youtube.com/watch?v=...
 ```
 
 ## Limitations
 
-- Sans ffmpeg, seuls les formats déjà fusionnés (souvent 360p–720p) sont disponibles
+- **Sans ffmpeg** : seuls les formats déjà fusionnés sont disponibles (souvent 360p–720p)
+- **Avec ffmpeg** : meilleure qualité possible selon la vidéo source (1080p, 4K…)
 - Certaines vidéos peuvent être privées, géo-bloquées ou supprimées
 - **Instagram / Facebook** : contenus privés ou stories peuvent exiger une connexion (non géré par défaut)
 - **TikTok** : certains liens régionaux ou expirés peuvent échouer
