@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Téléchargeur YouTube – sans ffmpeg
-Utilise les formats pré-fusionnés (vidéo + audio dans un seul fichier).
-Dépendance : yt-dlp  →  pip install yt-dlp
+Téléchargeur vidéo multi-plateformes – sans ffmpeg
+YouTube, Facebook, Instagram, TikTok via yt-dlp.
+Privilégie les formats pré-fusionnés (vidéo + audio dans un seul fichier).
 """
 
 import sys
@@ -19,6 +19,47 @@ RED    = "\033[91m"
 CYAN   = "\033[96m"
 BOLD   = "\033[1m"
 RESET  = "\033[0m"
+
+# (id interne, nom affiché, motifs d'URL)
+SUPPORTED_PLATFORMS: list[tuple[str, str, list[str]]] = [
+    (
+        "youtube",
+        "YouTube",
+        [
+            r"(?:https?://)?(?:www\.|m\.)?youtube\.com/(?:watch\?[^\s#]*v=|shorts/|live/)",
+            r"(?:https?://)?youtu\.be/[\w-]+",
+        ],
+    ),
+    (
+        "facebook",
+        "Facebook",
+        [
+            r"(?:https?://)?(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.com)/"
+            r"(?:watch|reel|reels|video|videos|share/r|share/v|[^/?\s]+/videos)/",
+            r"(?:https?://)?(?:www\.)?fb\.watch/[\w-]+",
+        ],
+    ),
+    (
+        "instagram",
+        "Instagram",
+        [
+            r"(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel|reels|tv)/[\w-]+",
+        ],
+    ),
+    (
+        "tiktok",
+        "TikTok",
+        [
+            r"(?:https?://)?(?:www\.|vm\.|vt\.)?tiktok\.com/"
+            r"(?:@[\w.-]+/video/[\d]+|t/[\w-]+|[\w-]+)",
+        ],
+    ),
+]
+
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "igsh", "igshid", "si", "feature", "is_from_webapp",
+})
 
 
 def check_dependencies():
@@ -45,62 +86,71 @@ def _find_js_runtime() -> dict:
     return {}
 
 
-def normalize_youtube_url(url: str) -> str:
-    """Ne garde que la vidéo ciblée (ignore list=, radio, mix, etc.)."""
+def detect_platform(url: str) -> tuple[str, str] | None:
+    """Retourne (id_plateforme, nom_affiché) ou None si URL non reconnue."""
+    cleaned = url.strip()
+    for platform_id, display_name, patterns in SUPPORTED_PLATFORMS:
+        if any(re.search(p, cleaned, re.IGNORECASE) for p in patterns):
+            return platform_id, display_name
+    return None
+
+
+def normalize_url(url: str, platform: str) -> str:
+    """Nettoie l'URL selon la plateforme."""
     parsed = urlparse(url.strip())
-    if "youtube.com" not in parsed.netloc and "youtu.be" not in parsed.netloc:
-        return url.strip()
+    if not parsed.scheme:
+        parsed = urlparse(f"https://{url.strip()}")
 
-    if "youtu.be" in parsed.netloc:
-        video_id = parsed.path.lstrip("/").split("/")[0]
+    if platform == "youtube":
+        if "youtu.be" in parsed.netloc:
+            video_id = parsed.path.lstrip("/").split("/")[0]
+            if video_id:
+                return f"https://www.youtube.com/watch?v={video_id}"
+            return url.strip()
+
+        qs = parse_qs(parsed.query)
+        video_id = (qs.get("v") or [None])[0]
         if video_id:
-            return f"https://www.youtube.com/watch?v={video_id}"
-        return url.strip()
+            return urlunparse(parsed._replace(
+                query=urlencode({"v": video_id}),
+                fragment="",
+            ))
+        return urlunparse(parsed._replace(fragment=""))
 
-    qs = parse_qs(parsed.query)
-    video_id = (qs.get("v") or [None])[0]
-    if not video_id:
-        return url.strip()
+    qs = parse_qs(parsed.query, keep_blank_values=False)
+    clean_qs = {k: v for k, v in qs.items() if k.lower() not in _TRACKING_PARAMS}
+    return urlunparse(parsed._replace(
+        query=urlencode(clean_qs, doseq=True),
+        fragment="",
+    ))
 
-    clean_qs = urlencode({"v": video_id})
-    return urlunparse(parsed._replace(query=clean_qs, fragment=""))
 
-
-def base_ydl_opts(**extra) -> dict:
-    opts = {
-        "noplaylist": True,
-        "js_runtimes": _find_js_runtime(),
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-    }
+def base_ydl_opts(platform: str, **extra) -> dict:
+    opts: dict = {"noplaylist": True}
+    if platform == "youtube":
+        opts["js_runtimes"] = _find_js_runtime()
+        opts["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
     opts.update(extra)
     return opts
 
 
-def is_valid_youtube_url(url: str) -> bool:
-    patterns = [
-        r"(https?://)?(www\.)?(youtube\.com/watch\?v=[\w-]+)",
-        r"(https?://)?(youtu\.be/[\w-]+)",
-        r"(https?://)?(www\.)?(youtube\.com/shorts/[\w-]+)",
-        r"(https?://)?(www\.)?(youtube\.com/live/[\w-]+)",
-    ]
-    return any(re.match(p, url.strip()) for p in patterns)
+def is_supported_url(url: str) -> bool:
+    return detect_platform(url) is not None
 
 
-def get_best_no_merge_format(url: str) -> tuple[str, list]:
+def get_best_no_merge_format(url: str, platform: str) -> tuple[str, list]:
     """
     Analyse les formats disponibles et retourne le meilleur format
     pré-fusionné (vidéo+audio dans le même fichier), sans ffmpeg.
-    Retourne (format_id, liste_formats_affichée).
     """
     import yt_dlp
 
-    url = normalize_youtube_url(url)
-    with yt_dlp.YoutubeDL(base_ydl_opts(quiet=True, no_warnings=True)) as ydl:
+    url = normalize_url(url, platform)
+    with yt_dlp.YoutubeDL(base_ydl_opts(platform, quiet=True, no_warnings=True)) as ydl:
         info = ydl.extract_info(url, download=False)
 
     formats = info.get("formats", [])
 
-    # Garde uniquement les formats qui ont DÉJÀ vidéo + audio
     combined = [
         f for f in formats
         if f.get("vcodec") not in (None, "none")
@@ -108,9 +158,8 @@ def get_best_no_merge_format(url: str) -> tuple[str, list]:
     ]
 
     if not combined:
-        return "best", []
+        return "best[ext=mp4]/best[ext=webm]/best", []
 
-    # Trie par hauteur (résolution) décroissante, puis par filesize
     combined.sort(
         key=lambda f: (
             f.get("height") or 0,
@@ -120,8 +169,6 @@ def get_best_no_merge_format(url: str) -> tuple[str, list]:
     )
 
     best = combined[0]
-
-    # Résumé des 5 premiers pour info
     preview = []
     for f in combined[:5]:
         h   = f.get("height", "?")
@@ -137,10 +184,18 @@ def get_best_no_merge_format(url: str) -> tuple[str, list]:
 def download_video(url: str, output_dir: str = ".") -> None:
     import yt_dlp
 
+    detected = detect_platform(url)
+    if not detected:
+        raise ValueError("URL non reconnue.")
+
+    platform, platform_name = detected
+    url = normalize_url(url, platform)
+
     print(f"\n{CYAN}{'─'*55}{RESET}")
+    print(f"{BOLD}  Plateforme :{RESET} {platform_name}")
     print(f"{BOLD}  Analyse des formats disponibles…{RESET}")
 
-    fmt_id, preview = get_best_no_merge_format(url)
+    fmt_id, preview = get_best_no_merge_format(url, platform)
 
     if preview:
         print(f"\n  {YELLOW}Formats pré-fusionnés détectés (top 5) :{RESET}")
@@ -148,8 +203,8 @@ def download_video(url: str, output_dir: str = ".") -> None:
             print(line)
         print(f"\n  {GREEN}→ Sélectionné : format {fmt_id}{RESET}")
 
-    url = normalize_youtube_url(url)
     ydl_opts = base_ydl_opts(
+        platform,
         format=fmt_id,
         outtmpl=os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
         progress_hooks=[progress_hook],
@@ -164,13 +219,15 @@ def download_video(url: str, output_dir: str = ".") -> None:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         title    = info.get("title", "Inconnue")
-        duration = info.get("duration", 0)
-        uploader = info.get("uploader", "Inconnu")
-        mins, secs = divmod(duration, 60)
+        duration = info.get("duration") or 0
+        uploader = info.get("uploader") or info.get("channel") or "Inconnu"
+        mins, secs = divmod(int(duration), 60)
 
         print(f"  {BOLD}Titre    :{RESET} {title}")
-        print(f"  {BOLD}Chaîne   :{RESET} {uploader}")
-        print(f"  {BOLD}Durée    :{RESET} {mins:02d}:{secs:02d}\n")
+        print(f"  {BOLD}Auteur   :{RESET} {uploader}")
+        if duration:
+            print(f"  {BOLD}Durée    :{RESET} {mins:02d}:{secs:02d}")
+        print()
 
         ydl.download([url])
 
@@ -216,19 +273,24 @@ def progress_hook(d: dict) -> None:
         print(f"\n  {RED}✘  Erreur durant le téléchargement.{RESET}")
 
 
+def _supported_platforms_hint() -> str:
+    return ", ".join(name for _, name, _ in SUPPORTED_PLATFORMS)
+
+
 def main() -> None:
     check_dependencies()
 
     print(f"\n{BOLD}{CYAN}╔══════════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}{CYAN}║   YouTube Downloader – Sans ffmpeg       ║{RESET}")
+    print(f"{BOLD}{CYAN}║   Video Downloader – Sans ffmpeg         ║{RESET}")
     print(f"{BOLD}{CYAN}╚══════════════════════════════════════════╝{RESET}\n")
+    print(f"  {BOLD}Plateformes :{RESET} {_supported_platforms_hint()}\n")
 
     runtime = _find_js_runtime()
     if runtime:
         name = next(iter(runtime))
-        print(f"  {GREEN}Runtime JS :{RESET} {name}")
+        print(f"  {GREEN}Runtime JS :{RESET} {name} {YELLOW}(YouTube){RESET}")
     else:
-        print(f"  {YELLOW}Runtime JS :{RESET} aucun (installe Node ou Deno)")
+        print(f"  {YELLOW}Runtime JS :{RESET} aucun {YELLOW}(YouTube uniquement){RESET}")
         print(f"  → https://github.com/yt-dlp/yt-dlp/wiki/EJS\n")
 
     if not shutil.which("ffmpeg"):
@@ -239,7 +301,9 @@ def main() -> None:
 
     while True:
         try:
-            url = input(f"{BOLD}  Colle le lien YouTube{RESET} (ou 'q' pour quitter) : ").strip()
+            url = input(
+                f"{BOLD}  Colle le lien vidéo{RESET} (ou 'q' pour quitter) : "
+            ).strip()
         except (KeyboardInterrupt, EOFError):
             print(f"\n\n  {YELLOW}Annulé.{RESET}")
             break
@@ -252,12 +316,13 @@ def main() -> None:
             print(f"  {RED}Lien vide, réessaie.{RESET}\n")
             continue
 
-        if not is_valid_youtube_url(url):
-            print(f"  {RED}URL non reconnue comme lien YouTube valide.{RESET}\n")
+        if not is_supported_url(url):
+            print(f"  {RED}URL non reconnue.{RESET}")
+            print(f"  Plateformes acceptées : {_supported_platforms_hint()}\n")
             continue
 
         try:
-            download_video(normalize_youtube_url(url), output_dir=output_dir)
+            download_video(url, output_dir=output_dir)
             print(f"\n  {CYAN}Enregistré dans : {output_dir}{RESET}\n")
         except Exception as exc:
             print(f"\n  {RED}Échec : {exc}{RESET}\n")

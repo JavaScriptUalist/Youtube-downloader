@@ -1,17 +1,27 @@
-# YouTube Downloader (sans ffmpeg)
+# Video Downloader (sans ffmpeg)
 
-Téléchargeur YouTube en ligne de commande, écrit en Python.  
+Téléchargeur vidéo en ligne de commande, écrit en Python.  
 Il utilise [yt-dlp](https://github.com/yt-dlp/yt-dlp) et cible les **formats pré-fusionnés** (vidéo + audio dans un seul fichier), donc **ffmpeg n'est pas obligatoire**.
 
 Licence : [MIT](LICENSE) — libre d'utilisation, modification et redistribution.
 
+## Plateformes supportées
+
+| Plateforme | Exemples de liens |
+|------------|-------------------|
+| **YouTube** | `watch?v=…`, `youtu.be/…`, Shorts, live |
+| **Facebook** | `/watch`, `/reel`, `/video`, `fb.watch/…` |
+| **Instagram** | `/p/…`, `/reel/…`, `/reels/…`, `/tv/…` |
+| **TikTok** | `tiktok.com/@user/video/…`, `vm.tiktok.com/…` |
+
 ## Fonctionnalités
 
 - Interface terminal simple (coller un lien, télécharger)
+- **YouTube, Facebook, Instagram et TikTok** via leur URL
 - Sélection automatique du meilleur format pré-fusionné disponible
 - Barre de progression, vitesse et ETA
-- Compatible **yt-dlp 2026+** (runtime JavaScript Node/Deno + scripts EJS)
-- Ignore les paramètres de playlist (`list=`, radio, mix) — une seule vidéo à la fois
+- Compatible **yt-dlp 2026+** (runtime JavaScript Node/Deno + scripts EJS pour YouTube)
+- Ignore les paramètres de playlist YouTube (`list=`, radio, mix)
 - Enregistrement dans le dossier `Téléchargements` de l'utilisateur
 
 ## Prérequis
@@ -56,8 +66,8 @@ winget install Gyan.FFmpeg
 python downloadyt.py
 ```
 
-1. Collez l'URL YouTube (`watch`, `youtu.be`, Shorts, live)
-2. Le script analyse les formats et lance le téléchargement
+1. Collez l'URL d'une vidéo (YouTube, Facebook, Instagram ou TikTok)
+2. Le script détecte la plateforme, analyse les formats et lance le téléchargement
 3. Tapez `q` pour quitter
 
 Les fichiers sont enregistrés dans :
@@ -69,19 +79,23 @@ Les fichiers sont enregistrés dans :
 
 ```
 ╔══════════════════════════════════════════╗
-║   YouTube Downloader – Sans ffmpeg       ║
+║   Video Downloader – Sans ffmpeg         ║
 ╚══════════════════════════════════════════╝
 
-  Runtime JS : node
+  Plateformes : YouTube, Facebook, Instagram, TikTok
+
+  Runtime JS : node (YouTube)
   ffmpeg : absent (formats pré-fusionnés uniquement)
 
-  Colle le lien YouTube (ou 'q' pour quitter) : https://www.youtube.com/watch?v=...
+  Colle le lien vidéo (ou 'q' pour quitter) : https://www.tiktok.com/@user/video/...
 ```
 
 ## Limitations
 
 - Sans ffmpeg, seuls les formats déjà fusionnés (souvent 360p–720p) sont disponibles
 - Certaines vidéos peuvent être privées, géo-bloquées ou supprimées
+- **Instagram / Facebook** : contenus privés ou stories peuvent exiger une connexion (non géré par défaut)
+- **TikTok** : certains liens régionaux ou expirés peuvent échouer
 - YouTube change régulièrement son API : mettez **yt-dlp** à jour en cas de problème
 
 ```bash
@@ -109,8 +123,8 @@ Les issues et pull requests sont les bienvenues.
 
 ## Avertissement légal
 
-Respectez les [Conditions d'utilisation de YouTube](https://www.youtube.com/t/terms) et les droits d'auteur.  
-Ce outil est fourni à des fins éducatives ; l'auteur n'est pas responsable de son usage.
+Respectez les conditions d'utilisation de chaque plateforme (YouTube, Meta, TikTok) et les droits d'auteur.  
+Cet outil est fourni à des fins éducatives ; l'auteur n'est pas responsable de son usage.
 
 ## Remerciements
 
